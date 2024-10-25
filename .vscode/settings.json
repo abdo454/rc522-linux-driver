@@ -4,11 +4,11 @@
   "C_Cpp.default.compilerPath": "/usr/bin/gcc",
   "C_Cpp.default.includePath": [
     "${workspaceFolder}/**",
-    "/lib/modules/6.5.0-44-generic/build/include",
-    "/lib/modules/6.5.0-44-generic/build/arch/x86/include",
-    "/lib/modules/6.5.0-44-generic/build/arch/x86/include/generated",
-    "/lib/modules/6.5.0-44-generic/build/include/uapi",
-    "/lib/modules/6.5.0-44-generic/build/arch/x86/include/uapi"
+    "/home/abdo/tutorials/DevideDriver/rpi/lib/modules/6.6.56-v8_BY_ABDO_DAOOD+/build/include",
+    "/home/abdo/tutorials/DevideDriver/rpi/lib/modules/6.6.56-v8_BY_ABDO_DAOOD+/build/arch/x86/include",
+    "/home/abdo/tutorials/DevideDriver/rpi/lib/modules/6.6.56-v8_BY_ABDO_DAOOD+/build/arch/x86/include/generated",
+    "/home/abdo/tutorials/DevideDriver/rpi/lib/modules/6.6.56-v8_BY_ABDO_DAOOD+/build/include/uapi",
+    "/home/abdo/tutorials/DevideDriver/rpi/lib/modules/6.6.56-v8_BY_ABDO_DAOOD+/build/arch/x86/include/uapi"
   ],
   "C_Cpp.default.defines": ["DEBUG", "MODULE"],
   "C_Cpp.default.cStandard": "c11",
