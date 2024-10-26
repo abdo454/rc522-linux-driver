@@ -2,9 +2,10 @@
 #include "rc522_main.h"
 #include "rc522_api.h"
 
-
 static dev_t devt;
 static struct class *rc522_class;
+
+void check_card(void);
 
 int rc522_open(struct inode *, struct file *);
 int rc522_release(struct inode *, struct file *);
@@ -33,6 +34,7 @@ int rc522_release(struct inode *inode, struct file *file)
 
 ssize_t rc522_read(struct file *file, char __user *buf, size_t count, loff_t *offset)
 {
+    check_card();
     // printk("%s: Read from device count %lu ,offset %llu\n", DEVICE_NAME, count, offset);
     return 0;
 }
@@ -89,7 +91,7 @@ static int rc522_probe(struct spi_device *spi)
     spi_set_drvdata(spi, rc522);
 
     /* Initialize RC522 hardware */
-    ret = rc522_hw_init(spi);
+    ret = rc522_chip_init(spi);
     if (ret)
     {
         dev_err(&spi->dev, "Failed to initialize RC522: %d\n", ret);

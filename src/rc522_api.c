@@ -3,6 +3,7 @@
 #include "rc522_main.h"
 #include "rc522_api.h"
 
+struct spi_device *rc522_spi_device;
 // Function to write a value to a register
 // returns 0 on success, -ve on failure
 static int rc522_write_register(struct spi_device *spi, u8 reg, u8 value)
@@ -124,49 +125,55 @@ static int rc522_clear_bitmask(struct spi_device *spi, u8 reg, u8 mask)
 //  check if an RFID card is present.
 
 // rc522_transceive : handle the communication to and from the RC522.
-static int rc522_transceive(struct spi_device *spi, u8 cmd, u8 *send_data, u8 send_len, u8 *back_data, u8 *back_len)
+static int rc522_transceive(struct spi_device *spi, u8 cmd, u8 *send_data, u8 sendLen, u8 *backData, u8 *backLen)
 {
     int status = MI_ERR;
-    u8 irq_en = 0x00; // Enable all interrupts
-    u8 wait_irq = 0x00;
+    u8 irqEn = 0x00; // Enable all interrupts
+    u8 waitIRq = 0x00;
     u8 n;
     u32 i;
     switch (cmd)
     {
     case PCD_AUTHENT:
-        irq_en = 0x12;
-        wait_irq = 0x10;
+    {
+        irqEn = 0x12;
+        waitIRq = 0x10;
         break;
+    }
     case PCD_TRANSCEIVE:
-        irq_en = 0x77;   // Enable all interrupts
-        wait_irq = 0x30; // RX and Idle interrupt
+    {
+        irqEn = 0x77;
+        waitIRq = 0x30;
         break;
+    }
     default:
         break;
     }
-    rc522_write_register(spi, CommIEnReg, irq_en | 0x80); // Enable interrupts
-    rc522_clear_bitmask(spi, CommIrqReg, 0x80);           // Clear all interrupt flags
-    rc522_set_bitmask(spi, FIFOLevelReg, 0x80);           // Flush FIFO buffer
+
+    rc522_write_register(spi, CommIEnReg, irqEn | 0x80); // Enable interrupts
+    rc522_clear_bitmask(spi, CommIrqReg, 0x80);          // Clear all interrupt flags
+    rc522_set_bitmask(spi, FIFOLevelReg, 0x80);          // Flush FIFO buffer
 
     rc522_write_register(spi, CommandReg, PCD_IDLE); // No action, cancel current command
 
-    /* Write data to FIFO */
-    for (i = 0; i < send_len; i++)
+    // Writing data to the FIFO
+    for (i = 0; i < sendLen; i++)
     {
         rc522_write_register(spi, FIFODataReg, send_data[i]);
     }
 
+    // Execute the command
     rc522_write_register(spi, CommandReg, cmd); // Start transmission
     if (cmd == PCD_TRANSCEIVE)
         rc522_set_bitmask(spi, BitFramingReg, 0x80); // Start Send
 
-    /* Wait for the transmission to complete */
+    // Waiting to receive data to complete
     i = 2000; // Timeout counter
     do
     {
-        n = rc522_read_register(spi, CommIrqReg, &n);
+        rc522_read_register(spi, CommIrqReg, &n);
         i--;
-    } while ((i != 0) && !(n & 0x01) && !(n & wait_irq));
+    } while ((i != 0) && !(n & 0x01) && !(n & waitIRq));
 
     rc522_clear_bitmask(spi, BitFramingReg, 0x80); // Stop Send
 
@@ -177,35 +184,47 @@ static int rc522_transceive(struct spi_device *spi, u8 cmd, u8 *send_data, u8 se
         if (!(error & 0x1B))
         {
             status = MI_OK;
-            if (n & irq_en & 0x01)
+            if (n & irqEn & 0x01)
+            {
                 status = MI_NOTAGERR;
+            }
+
             if (cmd == PCD_TRANSCEIVE)
             {
-                u8 fifo_level;
-                u8 last_bits;
-                rc522_read_register(spi, FIFOLevelReg, &fifo_level);
-                rc522_read_register(spi, ControlReg, &last_bits);
-                last_bits = last_bits & 0x07;
-                if (last_bits)
-                    *back_len = (fifo_level - 1) * 8 + last_bits;
+                u8 lastBits;
+                rc522_read_register(spi, FIFOLevelReg, &n);
+                rc522_read_register(spi, ControlReg, &lastBits);
+                lastBits = lastBits & 0x07;
+                if (lastBits)
+                {
+                    *backLen = (n - 1) * 8 + lastBits;
+                }
                 else
-                    *back_len = fifo_level * 8;
-                if (0 == fifo_level)
-                    fifo_level = 1;
-                if (fifo_level > DEF_FIFO_LENGTH)
-                    fifo_level = DEF_FIFO_LENGTH;
-                /* Read the data from FIFO */
-                for (i = 0; i < fifo_level; i++)
-                    rc522_read_register(spi, FIFODataReg, &back_data[i]);
+                {
+                    *backLen = n * 8;
+                }
+
+                if (n == 0)
+                {
+                    n = 1;
+                }
+                if (n > RC522_MAX_LEN)
+                {
+                    n = RC522_MAX_LEN;
+                }
+
+                // Reading the received data in FIFO
+                for (i = 0; i < n; i++)
+                {
+                    rc522_read_register(spi, FIFODataReg, &backData[i]);
+                }
             }
         }
         else
         {
-            printk(KERN_ERR "RC522 Driver: failed to read irq reg: addr=0x%02x, value=0x%02x\n", CommIrqReg, n);
             status = MI_ERR;
         }
     }
-
     return status;
 }
 
@@ -216,8 +235,8 @@ static int rc522_request(struct spi_device *spi, u8 req_mode, u8 *tag_type)
 
     /* Send the REQA command */
     rc522_write_register(spi, BitFramingReg, 0x07); // Set bit framing
-
-    status = rc522_transceive(spi, PCD_TRANSCEIVE, &req_mode, 1, tag_type, &back_bits);
+    tag_type[0] = req_mode;
+    status = rc522_transceive(spi, PCD_TRANSCEIVE, tag_type, 1, tag_type, &back_bits);
     if ((status != MI_OK) || (back_bits != 0x10))
     {
         status = MI_ERR;
@@ -226,11 +245,9 @@ static int rc522_request(struct spi_device *spi, u8 req_mode, u8 *tag_type)
     return status;
 }
 
-int rc522_card_present(struct spi_device *spi)
+int rc522_card_present(struct spi_device *spi, u8 *tag_type)
 {
-    u8 tag_type[25] = {0x00};
     int status;
-
     status = rc522_request(spi, PICC_REQIDL, tag_type);
     printk("Request %s\n", (status == MI_OK) ? "succeeded" : "failed");
     for (int i = 0; i < 3; i++)
@@ -239,12 +256,15 @@ int rc522_card_present(struct spi_device *spi)
     }
     return (status == MI_OK) ? 1 : 0;
 }
+/*
+ * Function Name: rc522_Reset
+ * Description: Reset RC522
+ * Input: spi_device *spi
+ * Return value: None
+ */
 static void rc522_Reset(struct spi_device *spi)
 {
-
     rc522_write_register(spi, CommandReg, PCD_RESETPHASE);
-
-    msleep(50);
 }
 
 static void rc522_antenna_off(struct spi_device *spi)
@@ -271,33 +291,37 @@ int rc522_get_version(struct spi_device *spi)
     return version;
 }
 
-int rc522_hw_init(struct spi_device *spi)
+int rc522_chip_init(struct spi_device *spi)
 {
+    rc522_spi_device = spi;
     struct rc522_data *rc522 = spi_get_drvdata(spi);
     /* Reset the RC522 */
     if (rc522->reset_gpio)
     {
-        gpiod_set_value(rc522->reset_gpio, 0);
-        msleep(50);
         gpiod_set_value(rc522->reset_gpio, 1);
+        msleep(10);
+        gpiod_set_value(rc522->reset_gpio, 0);
+        msleep(5);
+        gpiod_set_value(rc522->reset_gpio, 1);
+        msleep(50);
     }
-    rc522_write_register(spi, CommandReg, PCD_RESETPHASE);
-    msleep(50);
-    rc522_write_register(spi, TxModeReg, 0x00);   // Reset baud rates
-    rc522_write_register(spi, RxModeReg, 0x00);   // Reset baud rates
-    rc522_write_register(spi, ModWidthReg, 0x26); // Reset ModWidthReg
+    rc522_Reset(spi);
+    rc522_write_register(spi, TxModeReg, 0x00); // Reset baud rates
+    rc522_write_register(spi, RxModeReg, 0x00);
+    // Reset ModWidthReg
+    rc522_write_register(spi, ModWidthReg, 0x26);
 
-    // Timer: TPrescaler*TreloadVal/6.78MHz = 24ms
-    rc522_write_register(spi, TModeReg, 0x80);      // 0x8D);      // Tauto=1; f(Timer) = 6.78MHz/TPreScaler
-    rc522_write_register(spi, TPrescalerReg, 0xA9); // 0x34); // TModeReg[3..0] + TPrescalerReg
-    rc522_write_register(spi, TReloadRegL, 0x03);   // 30);
-    rc522_write_register(spi, TReloadRegH, 0xE8);   // 0);
-    rc522_write_register(spi, TxAutoReg, 0x40);     // force 100% ASK modulation
-    rc522_write_register(spi, ModeReg, 0x3D);       // CRC Initial value 0x6363
-    rc522_antenna_off(spi);
-    msleep(50);
+    // When communicating with a PICC we need a timeout if something goes wrong.
+    // f_timer = 13.56 MHz / (2*TPreScaler+1) where TPreScaler = [TPrescaler_Hi:TPrescaler_Lo].
+    // TPrescaler_Hi are the four low bits in TModeReg. TPrescaler_Lo is TPrescalerReg.
+    rc522_write_register(spi, TModeReg, 0x80);      // TAuto=1; timer starts automatically at the end of the transmission in all communication modes at all speeds
+    rc522_write_register(spi, TPrescalerReg, 0xA9); // TPreScaler = TModeReg[3..0]:TPrescalerReg, ie 0x0A9 = 169 => f_timer=40kHz, ie a timer period of 25μs.
+    rc522_write_register(spi, TReloadRegH, 0x03);   // Reload timer with 0x3E8 = 1000, ie 25ms before timeout.
+    rc522_write_register(spi, TReloadRegL, 0xE8);
+
+    rc522_write_register(spi, TxAutoReg, 0x40); // Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
+    rc522_write_register(spi, ModeReg, 0x3D);   // Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
     rc522_antenna_on(spi);
-    msleep(100);
     int ret = rc522_test_write_read(spi);
     if (ret)
     {
@@ -311,8 +335,21 @@ int rc522_hw_init(struct spi_device *spi)
         dev_err(&spi->dev, "RC522 Driver: Failed to get version: %d\n", version);
         return version;
     }
+
     dev_info(&spi->dev, "RC522 Driver: RC522 Version: 0x%02x\n", version);
     dev_info(&spi->dev, "RC522 hardware initialization completed successfully\n");
-    rc522_card_present(spi);
     return 0;
+}
+
+void check_card(void)
+{
+    printk("Checking card");
+    struct spi_device *spi = rc522_spi_device;
+    int version = rc522_get_version(spi);
+    if (version < 0)
+        dev_err(&spi->dev, "RC522 Driver: Failed to get version: %d\n", version);
+    else
+        dev_info(&spi->dev, "RC522 Driver: RC522 Version: 0x%02x\n", version);
+    u8 tag_type[RC522_MAX_LEN];
+    rc522_card_present(spi, tag_type);
 }

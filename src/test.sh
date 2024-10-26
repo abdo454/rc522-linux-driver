@@ -56,3 +56,5 @@ else
 fi
 
 $SSH_CMD "dmesg"
+
+$SSH_CMD "sudo  chmod 666 /dev/rc522 "
