@@ -1,14 +1,15 @@
 # Module name
-MODULE_NAME := rc522
+MODULE_NAME := rc522_driver
+
 
 
 obj-m += $(MODULE_NAME).o
-
+$(MODULE_NAME)-objs := rc522_main.o rc522_api.o
 
 CROSS_COMPILE := aarch64-linux-gnu-
 
 # Kernel directory for the target architecture
-KDIR := /home/abdo/tutorials/DevideDriver/rpi/lib/modules/6.6.56-v8_BY_ABDO_DAOOD+/build/
+KDIR := ../../rpi/lib/modules/6.6.56-v8_BY_ABDO_DAOOD+/build/
 
 
 PWD := $(shell pwd)

@@ -1,32 +1,10 @@
 
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/spi/spi.h>
-#include <linux/cdev.h>
-#include <linux/device.h>
-#include <linux/fs.h>
-#include <linux/mutex.h>
-// #include <linux/property.h>
-#include <linux/types.h>
-#include <linux/gpio/consumer.h>
-#include <linux/of.h>
-#include <linux/of_gpio.h>
-#include <linux/delay.h>
+#include "rc522_main.h"
 #include "rc522_api.h"
 
-#define DEVICE_NAME "rc522"
-#define CLASS_NAME "rc522_class"
 
 static dev_t devt;
 static struct class *rc522_class;
-struct rc522_data
-{
-    dev_t devt;
-    struct device *dev;
-    struct cdev cdev;
-    struct mutex buf_lock;
-    struct gpio_desc *reset_gpio;
-};
 
 int rc522_open(struct inode *, struct file *);
 int rc522_release(struct inode *, struct file *);
@@ -75,23 +53,7 @@ static int rc522_probe(struct spi_device *spi)
     rc522 = devm_kzalloc(&spi->dev, sizeof(*rc522), GFP_KERNEL);
     if (!rc522)
         return -ENOMEM;
-    // /* Check for device properties */
-    // if (!device_property_present(&spi->dev, "reset-gpio-pin"))
-    // {
-    //     dev_err(&spi->dev, " Error! Device property 'reset-gpio-pin' not found!\n");
-    //     return -EINVAL;
-    // }
-    // ret = device_property_read_u32(&spi->dev, "reset-gpio-pin", &rc522->reset_pin);
-    // if (ret)
-    // {
-    //     dev_err(&spi->dev, "Error! Could not read 'reset-gpio-pin'\n");
-    //     return ret;
-    // }
-    // if (!gpio_is_valid(rc522->reset_pin))
-    // {
-    //     dev_err(&spi->dev, "Reset GPIO %d is not valid\n", rc522->reset_pin);
-    //     return -1;
-    // }
+
     rc522->reset_gpio = devm_gpiod_get_optional(&spi->dev, "reset", GPIOD_OUT_HIGH);
     if (IS_ERR(rc522->reset_gpio))
     {
@@ -99,21 +61,6 @@ static int rc522_probe(struct spi_device *spi)
         dev_err(&spi->dev, "Failed to get reset GPIO: %d\n", ret);
         return ret;
     }
-    if (rc522->reset_gpio)
-    {
-
-        gpiod_set_value(rc522->reset_gpio, 0);
-        msleep(50);
-        gpiod_set_value(rc522->reset_gpio, 1);
-    }
-    // if (gpio_request(rc522->reset_pin, "rc522_reset") < 0)
-    // if (devm_gpio_request(&spi->dev, rc522->reset_pin, "rc522_reset") < 0)
-    // {
-    //     dev_err(&spi->dev, "ERROR: Reset GPIO %d request\n", rc522->reset_pin);
-    //     return -1;
-    // }
-    // gpio_direction_output(rc522->reset_pin, 1);
-
     /* Initialize the driver data */
     rc522->devt = devt;
     rc522->dev = &spi->dev;
@@ -142,7 +89,7 @@ static int rc522_probe(struct spi_device *spi)
     spi_set_drvdata(spi, rc522);
 
     /* Initialize RC522 hardware */
-    // ret = rc522_hw_init(spi);
+    ret = rc522_hw_init(spi);
     if (ret)
     {
         dev_err(&spi->dev, "Failed to initialize RC522: %d\n", ret);
@@ -157,7 +104,6 @@ err_hw_init:
 err_device_create:
     cdev_del(&rc522->cdev);
 err_cdev_add:
-    // gpio_free(rc522->reset_pin);
     return ret;
 }
 

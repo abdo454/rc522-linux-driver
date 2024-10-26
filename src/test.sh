@@ -3,8 +3,8 @@
 # source ~/.bash_aliases
 
 RC522_DTBO="rc522-overlay.dtbo "
-MODULE="rc522.ko"
-MODULE_NAME="rc522"
+MODULE="rc522_driver.ko"
+MODULE_NAME="rc522_driver"
 SCPI_CMD="scppi"
 # SSH_CMD="ssh pi@192.168.0.23"
 SSH_CMD="ssh pi@192.168.1.2"
@@ -27,7 +27,7 @@ error_exit() {
 # if
 # Check if the module file exists
 
-make
+make || error_exit "Failed to Make the module file"
 if [ ! -f "$MODULE" ]; then
     error_exit "The module '$MODULE' does not exist. Please build it first."
 fi
