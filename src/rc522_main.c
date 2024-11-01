@@ -2,6 +2,7 @@
 #include "rc522_main.h"
 #include "rc522_api.h"
 
+static int Device_Open = 0;
 static dev_t devt;
 static struct class *rc522_class;
 
@@ -18,24 +19,59 @@ const struct file_operations rc522_fops = {
     .read = rc522_read,
     .write = rc522_write,
 };
-
+/**
+ * @brief Open RC522 device node
+ *
+ * @param inode
+ * @param file
+ * @return 0 on success, -ve on failure
+ */
 int rc522_open(struct inode *inode, struct file *file)
 {
+    /*
+     * We don't want to talk to two processes at the same time
+     */
+    if (Device_Open)
+        return -EBUSY;
+    Device_Open++;
+    struct rc522_data *rc522;
+    rc522 = container_of(inode->i_cdev, struct rc522_data, cdev);
+    if (!rc522)
+        return -ENODEV;
+    file->private_data = rc522;
+
+    /* Initialize RC522 hardware */
+    if (rc522->version == 0)
+    {
+        int ret = rc522_chip_init(rc522);
+        if (ret)
+        {
+            dev_err(&rc522->spi_dev->dev, "Failed to initialize RC522: %d\n", ret);
+            return -ENODEV;
+        }
+        int version = rc522_get_version(rc522);
+        if (version < 0)
+        {
+            return version;
+        }
+        rc522->version = version;
+    }
     printk("%s: Device opened\n", DEVICE_NAME);
     return 0;
 }
 
 int rc522_release(struct inode *inode, struct file *file)
 {
-
+    Device_Open--;
     printk("%s: Device closed\n", DEVICE_NAME);
     return 0;
 }
 
 ssize_t rc522_read(struct file *file, char __user *buf, size_t count, loff_t *offset)
 {
-    check_card();
-    // printk("%s: Read from device count %lu ,offset %llu\n", DEVICE_NAME, count, offset);
+
+    struct rc522_data *data = file->private_data;
+    rc522_test_read_card(data);
     return 0;
 }
 
@@ -49,9 +85,8 @@ ssize_t rc522_write(struct file *file, const char __user *buf, size_t count, lof
 static int rc522_probe(struct spi_device *spi)
 {
     struct rc522_data *rc522;
-    struct device *dev;
     int ret;
-    /* Allocate driver data */
+
     rc522 = devm_kzalloc(&spi->dev, sizeof(*rc522), GFP_KERNEL);
     if (!rc522)
         return -ENOMEM;
@@ -65,10 +100,11 @@ static int rc522_probe(struct spi_device *spi)
     }
     /* Initialize the driver data */
     rc522->devt = devt;
-    rc522->dev = &spi->dev;
-    mutex_init(&rc522->buf_lock);
+    rc522->spi_dev = spi;
+    rc522->version = 0;
+    /* Instead of using mutux, i will allow one process to interface with my device driver by using counter "Device_Open"*/
+    // mutex_init(&rc522->buf_lock);
 
-    /* Initialize cdev */
     cdev_init(&rc522->cdev, &rc522_fops);
     rc522->cdev.owner = THIS_MODULE;
 
@@ -80,6 +116,7 @@ static int rc522_probe(struct spi_device *spi)
         goto err_cdev_add;
     }
     /* Create device node */
+    struct device *dev;
     dev = device_create(rc522_class, &spi->dev, rc522->devt, rc522, DEVICE_NAME);
     if (IS_ERR(dev))
     {
@@ -90,19 +127,10 @@ static int rc522_probe(struct spi_device *spi)
     /* Save driver data */
     spi_set_drvdata(spi, rc522);
 
-    /* Initialize RC522 hardware */
-    ret = rc522_chip_init(spi);
-    if (ret)
-    {
-        dev_err(&spi->dev, "Failed to initialize RC522: %d\n", ret);
-        goto err_hw_init;
-    }
-
     dev_info(&spi->dev, "RC522 probe function completed successfully\n");
-
     return 0;
-err_hw_init:
-    device_destroy(rc522_class, rc522->devt);
+
+    // device_destroy(rc522_class, rc522->devt);
 err_device_create:
     cdev_del(&rc522->cdev);
 err_cdev_add:
@@ -148,7 +176,7 @@ static int __init rc522_init(void)
     }
     pr_info("Allocated Major = %d Minor = %d\n", MAJOR(devt), MINOR(devt));
 
-    /* Create device class */
+  
     rc522_class = class_create(CLASS_NAME);
     if (IS_ERR(rc522_class))
     {
@@ -156,7 +184,6 @@ static int __init rc522_init(void)
         result = PTR_ERR(rc522_class);
         goto unregister_chrdev;
     }
-    /* Register the SPI driver */
     result = spi_register_driver(&rc522_spi_driver);
     if (result < 0)
     {
@@ -185,7 +212,6 @@ module_init(rc522_init);
 module_exit(rc522_exit);
 
 MODULE_DEVICE_TABLE(of, rc522_of_match);
-// MODULE_ALIAS("spi:rc522");
 
 MODULE_AUTHOR("Daood Abdo abdo.daood94@gmail.com");
 MODULE_DESCRIPTION("A Linux SPI Device Driver for Module RC522.");

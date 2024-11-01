@@ -3,7 +3,6 @@
 #include "rc522_main.h"
 #include "rc522_api.h"
 
-struct spi_device *rc522_spi_device;
 // Function to write a value to a register
 // returns 0 on success, -ve on failure
 static int rc522_write_register(struct spi_device *spi, u8 reg, u8 value)
@@ -19,23 +18,6 @@ static int rc522_write_register(struct spi_device *spi, u8 reg, u8 value)
     return ret;
 }
 
-// Function to read a value from a register
-// returns 0 on success, -ve on failure
-// doesn't work
-static int rc522_read_register2(struct spi_device *spi, u8 reg, u8 *value)
-{
-    u8 tx_buf[1] = {reg};
-    u8 rx_buf[1];
-    int ret;
-
-    ret = spi_write_then_read(spi, tx_buf, 1, rx_buf, 1);
-    if (ret < 0)
-    {
-        return ret;
-    }
-    *value = rx_buf[0];
-    return 0;
-}
 // Function to read a value from a register
 // returns 0 on success, -ve on failure
 static int rc522_read_register(struct spi_device *spi, u8 reg, u8 *value)
@@ -69,6 +51,7 @@ static int rc522_read_register(struct spi_device *spi, u8 reg, u8 *value)
 }
 
 // Function to perform a read/write operations on the RC522
+// return 0 on success, -ve on failure
 static int rc522_test_write_read(struct spi_device *spi)
 {
     u8 test_reg = SerialSpeedReg; // Any register that supports write/read operations, e.g., SerialSpeedReg
@@ -79,7 +62,7 @@ static int rc522_test_write_read(struct spi_device *spi)
     int ret = rc522_write_register(spi, test_reg, write_val);
     if (ret)
     {
-        printk(KERN_ERR "RC522 Driver: Write failed with error %d\n", ret);
+        dev_err(&spi->dev, "Write failed with error %d\n", ret);
         return ret;
     }
 
@@ -87,7 +70,7 @@ static int rc522_test_write_read(struct spi_device *spi)
     ret = rc522_read_register(spi, test_reg, &read_val);
     if (ret)
     {
-        printk(KERN_ERR "RC522 Driver: Read failed with error %d\n", ret);
+        dev_err(&spi->dev, "Read failed with error %d\n", ret);
         return ret;
     }
 
@@ -95,12 +78,12 @@ static int rc522_test_write_read(struct spi_device *spi)
     if (read_val == write_val)
     {
         ret = 0;
-        printk(KERN_INFO "RC522 Driver: Write/Read test passed. Value: 0x%02x\n", read_val);
+        dev_info(&spi->dev, "Write/Read test passed.\n");
     }
     else
     {
         ret = -1;
-        printk(KERN_ERR "RC522 Driver: Write/Read test failed. Written: 0x%02x, Read: 0x%02x\n", write_val, read_val);
+        dev_err(&spi->dev, "Write/Read test failed. Written: 0x%02x, Read: 0x%02x\n", write_val, read_val);
     }
     return ret;
 }
@@ -123,8 +106,17 @@ static int rc522_clear_bitmask(struct spi_device *spi, u8 reg, u8 mask)
 }
 /* -------------------------------------------------------------- */
 //  check if an RFID card is present.
-
-// rc522_transceive : handle the communication to and from the RC522.
+/**
+ * @brief
+ *
+ * @param spi
+ * @param cmd
+ * @param send_data
+ * @param sendLen
+ * @param backData
+ * @param backLen
+ * @return MI_OK on success, MI_ERR, MI_NOTAGERR on failure
+ */
 static int rc522_transceive(struct spi_device *spi, u8 cmd, u8 *send_data, u8 sendLen, u8 *backData, u8 *backLen)
 {
     int status = MI_ERR;
@@ -227,12 +219,19 @@ static int rc522_transceive(struct spi_device *spi, u8 cmd, u8 *send_data, u8 se
     }
     return status;
 }
-
-static int rc522_request(struct spi_device *spi, u8 req_mode, u8 *tag_type)
+/**
+ * @brief
+ *
+ * @param spi
+ * @param req_mode
+ * @param tag_type
+ * @return MI_OK on card exist, MI_ERR on error
+ */
+static int rc522_request_card(struct spi_device *spi, u8 req_mode)
 {
     int status;
     u8 back_bits;
-
+    u8 tag_type[10];
     /* Send the REQA command */
     rc522_write_register(spi, BitFramingReg, 0x07); // Set bit framing
     tag_type[0] = req_mode;
@@ -245,17 +244,6 @@ static int rc522_request(struct spi_device *spi, u8 req_mode, u8 *tag_type)
     return status;
 }
 
-int rc522_card_present(struct spi_device *spi, u8 *tag_type)
-{
-    int status;
-    status = rc522_request(spi, PICC_REQIDL, tag_type);
-    printk("Request %s\n", (status == MI_OK) ? "succeeded" : "failed");
-    for (int i = 0; i < 3; i++)
-    {
-        printk("%02x ", tag_type[i]);
-    }
-    return (status == MI_OK) ? 1 : 0;
-}
 /*
  * Function Name: rc522_Reset
  * Description: Reset RC522
@@ -280,21 +268,38 @@ static void rc522_antenna_on(struct spi_device *spi)
         rc522_write_register(spi, TxControlReg, value | 0x03);
     }
 }
-int rc522_get_version(struct spi_device *spi)
-{
-    u8 version;
-    int ret;
 
-    ret = rc522_read_register(spi, VersionReg, &version);
+/* Function name: rc522_detect
+ * @return version > 0  on success , -ve of failure
+ */
+int rc522_get_version(struct rc522_data *rc522)
+{
+    int ret;
+    u8 version;
+
+    ret = rc522_read_register(rc522->spi_dev, VersionReg, &version);
     if (ret < 0)
         return ret;
-    return version;
-}
 
-int rc522_chip_init(struct spi_device *spi)
+    switch (version)
+    {
+    case MFRC522_VERSION_1:
+    case MFRC522_VERSION_2:
+        dev_info(&rc522->spi_dev->dev, "MFRC522 version 0x%2X detected", version);
+        return version;
+    default:
+        dev_warn(&rc522->spi_dev->dev, "This chip is not an MFRC522: 0x%2X", version);
+    }
+    return -1;
+}
+/**
+ * @brief initialize RC522 device
+ *
+ * @param spi
+ * @return 0 on success, -ve on failure
+ */
+int rc522_chip_init(struct rc522_data *rc522)
 {
-    rc522_spi_device = spi;
-    struct rc522_data *rc522 = spi_get_drvdata(spi);
     /* Reset the RC522 */
     if (rc522->reset_gpio)
     {
@@ -305,51 +310,191 @@ int rc522_chip_init(struct spi_device *spi)
         gpiod_set_value(rc522->reset_gpio, 1);
         msleep(50);
     }
-    rc522_Reset(spi);
-    rc522_write_register(spi, TxModeReg, 0x00); // Reset baud rates
-    rc522_write_register(spi, RxModeReg, 0x00);
+    int ret = rc522_test_write_read(rc522->spi_dev);
+    if (ret)
+    {
+        dev_err(&rc522->spi_dev->dev, "RC522 Driver: Failed to write/read test: %d\n", ret);
+        return ret;
+    }
+    rc522_Reset(rc522->spi_dev);
+    rc522_write_register(rc522->spi_dev, TxModeReg, 0x00); // Reset baud rates
+    rc522_write_register(rc522->spi_dev, RxModeReg, 0x00);
     // Reset ModWidthReg
-    rc522_write_register(spi, ModWidthReg, 0x26);
+    rc522_write_register(rc522->spi_dev, ModWidthReg, 0x26);
 
     // When communicating with a PICC we need a timeout if something goes wrong.
     // f_timer = 13.56 MHz / (2*TPreScaler+1) where TPreScaler = [TPrescaler_Hi:TPrescaler_Lo].
     // TPrescaler_Hi are the four low bits in TModeReg. TPrescaler_Lo is TPrescalerReg.
-    rc522_write_register(spi, TModeReg, 0x80);      // TAuto=1; timer starts automatically at the end of the transmission in all communication modes at all speeds
-    rc522_write_register(spi, TPrescalerReg, 0xA9); // TPreScaler = TModeReg[3..0]:TPrescalerReg, ie 0x0A9 = 169 => f_timer=40kHz, ie a timer period of 25μs.
-    rc522_write_register(spi, TReloadRegH, 0x03);   // Reload timer with 0x3E8 = 1000, ie 25ms before timeout.
-    rc522_write_register(spi, TReloadRegL, 0xE8);
+    rc522_write_register(rc522->spi_dev, TModeReg, 0x80);      // TAuto=1; timer starts automatically at the end of the transmission in all communication modes at all speeds
+    rc522_write_register(rc522->spi_dev, TPrescalerReg, 0xA9); // TPreScaler = TModeReg[3..0]:TPrescalerReg, ie 0x0A9 = 169 => f_timer=40kHz, ie a timer period of 25μs.
+    rc522_write_register(rc522->spi_dev, TReloadRegH, 0x03);   // Reload timer with 0x3E8 = 1000, ie 25ms before timeout.
+    rc522_write_register(rc522->spi_dev, TReloadRegL, 0xE8);
 
-    rc522_write_register(spi, TxAutoReg, 0x40); // Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
-    rc522_write_register(spi, ModeReg, 0x3D);   // Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
-    rc522_antenna_on(spi);
-    int ret = rc522_test_write_read(spi);
-    if (ret)
-    {
-        dev_err(&spi->dev, "RC522 Driver: Failed to write/read test: %d\n", ret);
-        return ret;
-    }
+    rc522_write_register(rc522->spi_dev, TxAutoReg, 0x40); // Default 0x00. Force a 100 % ASK modulation independent of the ModGsPReg register setting
+    rc522_write_register(rc522->spi_dev, ModeReg, 0x3D);   // Default 0x3F. Set the preset value for the CRC coprocessor for the CalcCRC command to 0x6363 (ISO 14443-3 part 6.2.4)
+    rc522_antenna_on(rc522->spi_dev);
 
-    int version = rc522_get_version(spi);
-    if (version < 0)
-    {
-        dev_err(&spi->dev, "RC522 Driver: Failed to get version: %d\n", version);
-        return version;
-    }
-
-    dev_info(&spi->dev, "RC522 Driver: RC522 Version: 0x%02x\n", version);
-    dev_info(&spi->dev, "RC522 hardware initialization completed successfully\n");
+    dev_info(&rc522->spi_dev->dev, "RC522 hardware initialization completed successfully\n");
     return 0;
 }
-
-void check_card(void)
+/**
+ * @brief
+ *
+ * @param data
+ * @return MI_OK  on success, otherwise MI_ERR
+ */
+static int rc522_anticoll_card(struct rc522_data *data, struct rc522_card_info *card)
 {
-    printk("Checking card");
-    struct spi_device *spi = rc522_spi_device;
-    int version = rc522_get_version(spi);
-    if (version < 0)
-        dev_err(&spi->dev, "RC522 Driver: Failed to get version: %d\n", version);
+    int status;
+    u8 uid_length = 0;
+    u8 back_bits;
+    u8 id_csum = 0;
+    u8 i;
+    u8 *rx_buff = card->rx_buffer;
+    u8 *tx_buff = card->tx_buffer;
+    tx_buff[0] = PICC_ANTICOLL;
+    tx_buff[1] = 0x20;
+    rc522_clear_bitmask(data->spi_dev, Status2Reg, 0x08);
+    rc522_write_register(data->spi_dev, BitFramingReg, 0x00);
+    rc522_clear_bitmask(data->spi_dev, CollReg, 0x80);
+
+    status = rc522_transceive(data->spi_dev, PCD_TRANSCEIVE, tx_buff, 2, rx_buff, &back_bits);
+    if (status == MI_OK)
+    {
+        if (back_bits == 0x28)
+        { // 4-byte UID (32 bits) + 1 byte crc
+            uid_length = 4;
+        }
+        else if (back_bits == 0x46)
+        { // 7-byte UID (56 bits) +1 byte crc
+            uid_length = 7;
+        }
+        else
+        {
+            uid_length = 0;
+            status = MI_ERR; // Unexpected UID length
+        }
+        for (i = 0; i < uid_length; i++)
+        {
+            id_csum ^= rx_buff[i];
+        }
+        if (id_csum != rx_buff[uid_length])
+            status = MI_ERR;
+    }
+    card->uid_length = uid_length;
+    rc522_set_bitmask(data->spi_dev, CollReg, 0x80);
+    return status;
+}
+/**
+ * @brief
+ *
+ * @param data
+ * @param pIndata
+ * @param len
+ * @param pOutData
+ * @return 0 on success, -1 on failure
+ */
+static int rc522_calculateCRC(struct rc522_data *data, u8 *pIndata, u8 len, u8 *pOutData)
+{
+    int i;
+    u8 reg_val = 0;
+    rc522_clear_bitmask(data->spi_dev, DivIrqReg, 0x04);
+    rc522_write_register(data->spi_dev, CommandReg, PCD_IDLE);
+    rc522_set_bitmask(data->spi_dev, FIFOLevelReg, 0x80);
+
+    for (i = 0; i < len; i++)
+        rc522_write_register(data->spi_dev, FIFODataReg, *(pIndata + i));
+    rc522_write_register(data->spi_dev, CommandReg, PCD_CALCCRC);
+
+    i = 5;
+    do
+    {
+        rc522_read_register(data->spi_dev, DivIrqReg, &reg_val);
+        msleep(30);
+        i--;
+    } while ((i != 0) && !(reg_val & 0x04)); // CRCIrq = 1
+
+    rc522_read_register(data->spi_dev, CRCResultRegL, &pOutData[0]);
+    rc522_read_register(data->spi_dev, CRCResultRegM, &pOutData[1]);
+    return i > 0 ? 0 : -1;
+}
+
+/**
+ * @brief
+ *
+ * @param data
+ * @param card
+ * @return  >0 on success, 0 on failure
+ */
+int rc522_select_tag(struct rc522_data *data, struct rc522_card_info *card)
+{
+
+    int i = 0;
+    u8 temp_buff[10] = {};
+    int status;
+    u8 back_bits;
+    u8 size;
+    temp_buff[0] = PICC_SElECTTAG;
+    temp_buff[1] = 0x70;
+    for (i = 0; i < card->uid_length + 1; i++)
+    {
+        temp_buff[2 + i] = card->rx_buffer[i];
+    }
+    int len = 2 + card->uid_length + 1;
+    status = rc522_calculateCRC(data, temp_buff, len, &temp_buff[len]);
+    status = rc522_transceive(data->spi_dev, PCD_TRANSCEIVE, temp_buff, len + 2, temp_buff, &back_bits);
+    if ((status == MI_OK) && (back_bits == 0x18))
+        size = temp_buff[0];
     else
-        dev_info(&spi->dev, "RC522 Driver: RC522 Version: 0x%02x\n", version);
-    u8 tag_type[RC522_MAX_LEN];
-    rc522_card_present(spi, tag_type);
+        size = 0;
+    return size;
+}
+
+void rc522_test_read_card(struct rc522_data *data)
+{
+    int i = 5;
+    int ret = MI_ERR;
+    while (i--)
+    {
+        ret = rc522_request_card(data->spi_dev, PICC_REQIDL);
+        if (ret == MI_OK)
+        {
+            break;
+        }
+        msleep(25);
+    }
+    if (ret != MI_OK)
+    {
+        dev_info(&data->spi_dev->dev, " No card detected after multiple attempts\n");
+        return;
+    }
+
+    struct rc522_card_info card_info;
+    ret = rc522_anticoll_card(data, &card_info);
+    if (ret != MI_OK)
+    {
+        dev_info(&data->spi_dev->dev, " Failed to retrieve card UID (anti-collision failed)\n");
+    }
+    else
+    {
+        dev_info(&data->spi_dev->dev, "Card UID:");
+
+        for (int i = 0; i < card_info.uid_length; i++)
+        {
+            printk(" 0x%02x", card_info.rx_buffer[i]);
+        }
+        printk("\n");
+    }
+    ret = rc522_select_tag(data, &card_info);
+}
+void rc522_halt(struct rc522_data *rc522)
+{
+    u8 status;
+    u8 back_bits;
+    u8 buff[4];
+
+    buff[0] = PICC_HALT;
+    buff[1] = 0;
+    rc522_calculateCRC(rc522, buff, 2, &buff[2]);
+    status = rc522_transceive(rc522->spi_dev, PCD_TRANSCEIVE, buff, 4, buff, &back_bits);
 }

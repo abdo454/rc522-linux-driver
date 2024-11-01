@@ -3,6 +3,10 @@
 #ifndef RC522_API_MODULE_H
 #define RC522_API_MODULE_H
 
+#define MFRC522_VERSION_BASE 0x90
+#define MFRC522_VERSION_1 0x91
+#define MFRC522_VERSION_2 0x92
+
 // MF522command word
 #define PCD_IDLE 0x00    // NO action; cancel current command
 #define PCD_AUTHENT 0x0E // verify key
@@ -108,9 +112,19 @@
 #define Reserved32 0x3D
 #define Reserved33 0x3E
 #define Reserved34 0x3F
-void check_card(void);
-int rc522_chip_init(struct spi_device *spi);
-int rc522_card_present(struct spi_device *spi, u8 *tag_type);
+
+int rc522_chip_init(struct rc522_data *data);
+int rc522_get_version(struct rc522_data *data);
+int rc522_select_tag(struct rc522_data *data, struct rc522_card_info *card);
+
+/**
+ * @brief 
+ * Test function to detect and read a card's UID using the RC522 reader.
+ * @param data : Pointer to the rc522_data structure containing device-specific information.
+ */
+void rc522_test_read_card(struct rc522_data *data);
+
+void rc522_halt(struct rc522_data *data);
 #endif // RC522_API_MODULE_H
 // #define RC522_DEBUG
 
