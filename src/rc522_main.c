@@ -1,6 +1,10 @@
 
 #include "rc522_main.h"
 #include "rc522_api.h"
+#include <linux/ioctl.h>
+
+#define RC522_IOC_MAGIC 'r'
+#define RC522_IOC_GET_UID _IOR(RC522_IOC_MAGIC, 1, struct rc522_card_info)
 
 static int Device_Open = 0;
 static dev_t devt;
@@ -12,12 +16,14 @@ int rc522_open(struct inode *, struct file *);
 int rc522_release(struct inode *, struct file *);
 ssize_t rc522_read(struct file *, char __user *, size_t, loff_t *);
 ssize_t rc522_write(struct file *, const char __user *, size_t, loff_t *);
+long rc522_ioctl(struct file *filep, unsigned int cmd, unsigned long arg);
 const struct file_operations rc522_fops = {
     .owner = THIS_MODULE,
     .open = rc522_open,
     .release = rc522_release,
     .read = rc522_read,
     .write = rc522_write,
+    .unlocked_ioctl = rc522_ioctl,
 };
 /**
  * @brief Open RC522 device node
@@ -71,8 +77,63 @@ ssize_t rc522_read(struct file *file, char __user *buf, size_t count, loff_t *of
 {
 
     struct rc522_data *data = file->private_data;
-    rc522_test_read_card(data);
-    return 0;
+    struct rc522_card_info card_info;
+    // rc522_test_read_card(data);
+
+    memset(&card_info, 0, sizeof(card_info));
+
+    // 1- Request the card
+    int i = 5;
+    int ret = MI_ERR;
+    while (i--)
+    {
+        ret = rc522_request_card(data, PICC_REQIDL);
+        if (ret == MI_OK)
+        {
+            break;
+        }
+        msleep(10);
+    }
+    if (ret != MI_OK)
+        return -EIO;
+
+    // 2- Perform anti-collision to get UID
+    ret = rc522_anticoll_card(data, &card_info);
+    if (ret != MI_OK)
+    {
+        printk("2-\n");
+
+        return -EIO;
+    }
+
+    // 3- Select the tag
+    ret = rc522_select_tag(data, &card_info);
+    if (ret != MI_OK)
+    {
+        printk("3-\n");
+
+        return -EIO;
+    }
+
+    // Ensure user buffer is large enough
+    if (count < card_info.uid_length)
+    {
+        printk("4-\n");
+
+        return -EINVAL;
+    }
+
+    // Copy UID to user-space buffer
+    if (copy_to_user(buf, card_info.rx_buffer, card_info.uid_length))
+    {
+        printk("5-\n");
+
+        return -EFAULT;
+    }
+
+    return card_info.uid_length;
+
+    // rc522_test_read_card(data);
 }
 
 ssize_t rc522_write(struct file *file, const char __user *buf, size_t count, loff_t *offset)
@@ -80,6 +141,47 @@ ssize_t rc522_write(struct file *file, const char __user *buf, size_t count, lof
     // printk("%s: Write to device count %lu ,offset %llu\n", DEVICE_NAME, count, offset);
     return count;
 }
+
+long rc522_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
+{
+    struct rc522_data *data = filep->private_data;
+    struct rc522_card_info card_info;
+    int ret = MI_ERR;
+
+    switch (cmd)
+    {
+    case RC522_IOC_GET_UID:
+        memset(&card_info, 0, sizeof(card_info));
+        int i = 5;
+        while (i--)
+        {
+            ret = rc522_request_card(data, PICC_REQIDL);
+            if (ret == MI_OK)
+            {
+                break;
+            }
+            msleep(10);
+        }
+        if (ret != MI_OK)
+            return -EIO;
+
+        ret = rc522_anticoll_card(data, &card_info);
+        if (ret != MI_OK)
+            return -EIO;
+
+        ret = rc522_select_tag(data, &card_info);
+        if (ret != MI_OK)
+            return -EIO;
+
+        if (copy_to_user((void __user *)arg, &card_info, sizeof(card_info)))
+            return -EFAULT;
+
+        return 0;
+    default:
+        return -ENOTTY;
+    }
+}
+
 /*-------------------------------------------------------------------------*/
 
 static int rc522_probe(struct spi_device *spi)
@@ -176,7 +278,6 @@ static int __init rc522_init(void)
     }
     pr_info("Allocated Major = %d Minor = %d\n", MAJOR(devt), MINOR(devt));
 
-  
     rc522_class = class_create(CLASS_NAME);
     if (IS_ERR(rc522_class))
     {

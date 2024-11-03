@@ -219,6 +219,20 @@ static int rc522_transceive(struct spi_device *spi, u8 cmd, u8 *send_data, u8 se
     }
     return status;
 }
+static void rc522_antenna_off(struct spi_device *spi)
+{
+    rc522_clear_bitmask(spi, TxControlReg, 0x03);
+}
+static void rc522_antenna_on(struct spi_device *spi)
+{
+    u8 value;
+    rc522_read_register(spi, TxControlReg, &value);
+    if ((value & 0x03) != 0x03)
+    {
+        rc522_write_register(spi, TxControlReg, value | 0x03);
+    }
+}
+
 /**
  * @brief
  *
@@ -227,15 +241,17 @@ static int rc522_transceive(struct spi_device *spi, u8 cmd, u8 *send_data, u8 se
  * @param tag_type
  * @return MI_OK on card exist, MI_ERR on error
  */
-static int rc522_request_card(struct spi_device *spi, u8 req_mode)
+int rc522_request_card(struct rc522_data *rc522, u8 req_mode)
 {
     int status;
     u8 back_bits;
     u8 tag_type[10];
     /* Send the REQA command */
-    rc522_write_register(spi, BitFramingReg, 0x07); // Set bit framing
+    // rc522_clear_bitmask(rc522->spi_dev, Status2Reg, 0x08);
+    rc522_write_register(rc522->spi_dev, BitFramingReg, 0x07); // Set bit framing
+    // rc522_set_bitmask(rc522->spi_dev, TxControlReg, 0x03);
     tag_type[0] = req_mode;
-    status = rc522_transceive(spi, PCD_TRANSCEIVE, tag_type, 1, tag_type, &back_bits);
+    status = rc522_transceive(rc522->spi_dev, PCD_TRANSCEIVE, tag_type, 1, tag_type, &back_bits);
     if ((status != MI_OK) || (back_bits != 0x10))
     {
         status = MI_ERR;
@@ -253,20 +269,6 @@ static int rc522_request_card(struct spi_device *spi, u8 req_mode)
 static void rc522_Reset(struct spi_device *spi)
 {
     rc522_write_register(spi, CommandReg, PCD_RESETPHASE);
-}
-
-static void rc522_antenna_off(struct spi_device *spi)
-{
-    rc522_clear_bitmask(spi, TxControlReg, 0x03);
-}
-static void rc522_antenna_on(struct spi_device *spi)
-{
-    u8 value;
-    rc522_read_register(spi, TxControlReg, &value);
-    if ((value & 0x03) != 0x03)
-    {
-        rc522_write_register(spi, TxControlReg, value | 0x03);
-    }
 }
 
 /* Function name: rc522_detect
@@ -343,7 +345,7 @@ int rc522_chip_init(struct rc522_data *rc522)
  * @param data
  * @return MI_OK  on success, otherwise MI_ERR
  */
-static int rc522_anticoll_card(struct rc522_data *data, struct rc522_card_info *card)
+int rc522_anticoll_card(struct rc522_data *data, struct rc522_card_info *card)
 {
     int status;
     u8 uid_length = 0;
@@ -424,7 +426,7 @@ static int rc522_calculateCRC(struct rc522_data *data, u8 *pIndata, u8 len, u8 *
  *
  * @param data
  * @param card
- * @return  >0 on success, 0 on failure
+ * @return MI_OK on success, MI_ERR on failure
  */
 int rc522_select_tag(struct rc522_data *data, struct rc522_card_info *card)
 {
@@ -447,7 +449,7 @@ int rc522_select_tag(struct rc522_data *data, struct rc522_card_info *card)
         size = temp_buff[0];
     else
         size = 0;
-    return size;
+    return size > 0 ? MI_OK : MI_ERR;
 }
 
 void rc522_test_read_card(struct rc522_data *data)
@@ -456,12 +458,12 @@ void rc522_test_read_card(struct rc522_data *data)
     int ret = MI_ERR;
     while (i--)
     {
-        ret = rc522_request_card(data->spi_dev, PICC_REQIDL);
+        ret = rc522_request_card(data, PICC_REQIDL);
         if (ret == MI_OK)
         {
             break;
         }
-        msleep(25);
+        msleep(10);
     }
     if (ret != MI_OK)
     {

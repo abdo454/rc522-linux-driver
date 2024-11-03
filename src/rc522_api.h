@@ -115,10 +115,12 @@
 
 int rc522_chip_init(struct rc522_data *data);
 int rc522_get_version(struct rc522_data *data);
+int rc522_request_card(struct rc522_data *data, u8 req_mode);
+int rc522_anticoll_card(struct rc522_data *data, struct rc522_card_info *card);
 int rc522_select_tag(struct rc522_data *data, struct rc522_card_info *card);
 
 /**
- * @brief 
+ * @brief
  * Test function to detect and read a card's UID using the RC522 reader.
  * @param data : Pointer to the rc522_data structure containing device-specific information.
  */
